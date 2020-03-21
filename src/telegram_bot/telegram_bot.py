@@ -16,6 +16,7 @@ from telegram.ext import Updater
 import logging
 import time
 import os
+import queue
 
 import database.database as db
 
@@ -41,47 +42,47 @@ class Bot(object):
 
         self.counter = 0
 
-
         logging.info("Registering callbacks!")
         self.register_callbacks()
 
         while True:
+            self.counter += 1
+            if self.counter % 3 == 0:
+                logging.info("Adding new request")
+                db.request_DB.add_request(98798273, "123")
+
+            time.sleep(5)
             logging.info("Checking for news")
-            requests = self.fetch_news()
+            requests = db.request_DB.get_requests()
             logging.info(f"Found {len(requests)} new requests")
 
+            # Try to sort the current requests
             for request in requests:
-                zip_code = request["zip_code"]
-                logging.debug(f"Processing request for zip_code {zip_code}")
-                chat_id = db.find_person(zip_code)
-                logging.debug(f"Found a good sould at {zip_code} with chat_id {chat_id}")
-
-                phone_number = request["phone_number"]
-
-                logging.info(f"Sending message to {chat_id}")
-                self.bot.send_message(chat_id=chat_id, text=f"New request! Please call {phone_number}!")
-
-
-
-    def fetch_news(self):
-        time.sleep(5)
-
-        self.counter += 1
-        if self.counter%5 == 0:
-            return [
-                {"zip_code": str(123),
-                 "phone_number": 1766878,
-                 "request_id": self.counter
-                 }
-            ]
-
-        return []
+                try:
+                    chat_id = request.assigned_chat
+                    self.bot.send_message(chat_id=chat_id, text=f"A new request! You can choose to accept it with /accept {request.id_number}, or to reject it /reject {request.id_number}")
+                # If you don't work, then go back into the queueu
+                    db.request_DB.mark_request(request.id_number, "PENDING")
+                except:
+                    pass
 
     def register_callbacks(self):
 
         # Register "/register" command
         self.reg_handler = CommandHandler('register', self.new_user)
         self.dispatcher.add_handler(self.reg_handler)
+
+        # Register "/accept" command
+        self.accept_handler = CommandHandler('accept', self.accept_request)
+        self.dispatcher.add_handler(self.accept_handler)
+
+        # Register "/register" command
+        self.reject_handler = CommandHandler('reject', self.reject_request)
+        self.dispatcher.add_handler(self.reject_handler)
+
+        # Register "/fulfill" command
+        self.fulfill_handler = CommandHandler('fulfill', self.fulfill_request)
+        self.dispatcher.add_handler(self.fulfill_handler)
 
         # Register unknown message handler. NOTE: This *must* be the last command to be
         # registered. Otherwise, the following registered comamnds will not be
@@ -92,9 +93,42 @@ class Bot(object):
     def new_user(self, update, context):
         zip_code = context.args[0]
         chat_id = update.effective_chat.id
-        db.add_person(zip_code, chat_id)
+        db.volunteer_DB.add_person(zip_code, chat_id)
         logging.info(f"Added user with ZIP code {zip_code} and chat_id {chat_id}")
         context.bot.send_message(chat_id=update.effective_chat.id, text="Added you, with zip code {}".format(zip_code))
+
+    def accept_request(self, update, context):
+        request_id = context.args[0]
+        chat_id = update.effective_chat.id
+        if db.request_DB.check_user_asignment(request_id, chat_id):
+
+            request = db.request_DB.get_request_with_id(request_id)
+            context.bot.send_message(chat_id=chat_id, text=f"Thank you for accepting the request! You can call {request.phone_number}")
+            db.request_DB.mark_request(request_id, "ACCEPTED")
+        else:
+            context.bot.send_message(chat_id=chat_id, text=f"Sorry, but we could not recognize the request with that ID. Could you double check?")
+
+    def fulfill_request(self, update, context):
+        request_id = context.args[0]
+        chat_id = update.effective_chat.id
+        if db.request_DB.check_user_asignment(request_id, chat_id):
+
+            request = db.request_DB.get_request_with_id(request_id)
+            context.bot.send_message(chat_id=chat_id, text=f"Thank you! Marking this request as fulfilled!")
+            db.request_DB.mark_request(request_id, "FULFILLED")
+        else:
+            context.bot.send_message(chat_id=chat_id, text=f"Sorry, but we could not recognize the request with that ID. Could you double check?")
+
+    def reject_request(self, update, context):
+        request_id = context.args[0]
+        chat_id = update.effective_chat.id
+
+        if db.request_DB.check_user_asignment(request_id, chat_id):
+            request = db.request_DB.get_request_with_id(request_id)
+            context.bot.send_message(chat_id=chat_id, text=f"It is a pity you can't help now :(. See you later!")
+            db.request_DB.mark_request(request_id, "OPEN")
+        else:
+            context.bot.send_message(chat_id=chat_id, text=f"Sorry, but we could not recognize the request with that ID. Could you double check?")
 
     # Handle unknown commands
     def unknown(self, update, context):
