@@ -17,8 +17,10 @@ import logging
 import time
 import os
 import queue
+import re
 
-import database.database as db
+import utils.database as db
+import utils.strings as strings
 
 # Add logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -45,11 +47,16 @@ class Bot(object):
         logging.info("Registering callbacks!")
         self.register_callbacks()
 
+        self.lang = strings.English()
+
+        logging.info("Compiling regex")
+        self.identify_zip_code = re.compile("(?!01000|99999)(0[1-9]\d{3}|[1-9]\d{4})")
+
         while True:
             self.counter += 1
             if self.counter % 3 == 0:
                 logging.info("Adding new request")
-                db.request_DB.add_request(98798273, "123")
+                db.request_DB.add_request(98798273, "52351")
 
             time.sleep(5)
             logging.info("Checking for news")
@@ -60,7 +67,7 @@ class Bot(object):
             for request in requests:
                 try:
                     chat_id = request.assigned_chat
-                    self.bot.send_message(chat_id=chat_id, text=f"A new request! You can choose to accept it with /accept {request.id_number}, or to reject it /reject {request.id_number}")
+                    self.bot.send_message(chat_id=chat_id, text=self.lang.new_request.format(id_number = request.id_number))
                 # If you don't work, then go back into the queueu
                     db.request_DB.mark_request(request.id_number, "PENDING")
                 except:
@@ -91,44 +98,64 @@ class Bot(object):
         self.dispatcher.add_handler(self.unknown_handler)
 
     def new_user(self, update, context):
+        if len(context.args) == 0:
+            context.bot.send_message(chat_id=update.effective_chat.id, text=self.lang.callback_new_user_missing_zip)
+            return
         zip_code = context.args[0]
-        chat_id = update.effective_chat.id
-        db.volunteer_DB.add_person(zip_code, chat_id)
-        logging.info(f"Added user with ZIP code {zip_code} and chat_id {chat_id}")
-        context.bot.send_message(chat_id=update.effective_chat.id, text="Added you, with zip code {}".format(zip_code))
+        match = self.identify_zip_code.match(zip_code)
+        if match is not None:
+            chat_id = update.effective_chat.id
+            db.volunteer_DB.add_person(zip_code, chat_id)
+            logging.info(f"Added user with ZIP code {zip_code} and chat_id {chat_id}")
+            context.bot.send_message(chat_id=update.effective_chat.id, text=self.lang.callback_new_user_success.format(zip_code=zip_code))
+        else:
+            context.bot.send_message(chat_id=update.effective_chat.id, text=self.lang.callback_new_user_error)
+
 
     def accept_request(self, update, context):
+        if len(context.args) == 0:
+            context.bot.send_message(chat_id=update.effective_chat.id, text=self.lang.callback_accept_request_missing)
+            return
+
         request_id = context.args[0]
         chat_id = update.effective_chat.id
         if db.request_DB.check_user_asignment(request_id, chat_id):
 
             request = db.request_DB.get_request_with_id(request_id)
-            context.bot.send_message(chat_id=chat_id, text=f"Thank you for accepting the request! You can call {request.phone_number}")
+            context.bot.send_message(chat_id=update.effective_chat.id, text=self.lang.callback_accept_request_success.format(phone_number = request.phone_number))
             db.request_DB.mark_request(request_id, "ACCEPTED")
         else:
-            context.bot.send_message(chat_id=chat_id, text=f"Sorry, but we could not recognize the request with that ID. Could you double check?")
+            context.bot.send_message(chat_id=chat_id, text=self.lang.callback_accept_request_error)
 
     def fulfill_request(self, update, context):
+        if len(context.args) == 0:
+            context.bot.send_message(chat_id=update.effective_chat.id, text=self.lang.callback_fulfill_request_missing)
+            return
+
         request_id = context.args[0]
         chat_id = update.effective_chat.id
         if db.request_DB.check_user_asignment(request_id, chat_id):
 
             request = db.request_DB.get_request_with_id(request_id)
-            context.bot.send_message(chat_id=chat_id, text=f"Thank you! Marking this request as fulfilled!")
+            context.bot.send_message(chat_id=update.effective_chat.id, text=self.lang.callback_fulfill_request_success)
             db.request_DB.mark_request(request_id, "FULFILLED")
         else:
-            context.bot.send_message(chat_id=chat_id, text=f"Sorry, but we could not recognize the request with that ID. Could you double check?")
+            context.bot.send_message(chat_id=chat_id, text=self.lang.callback_fulfill_request_error)
 
     def reject_request(self, update, context):
+        if len(context.args) == 0:
+            context.bot.send_message(chat_id=update.effective_chat.id, text=self.lang.callback_reject_request_missing)
+            return
+
         request_id = context.args[0]
         chat_id = update.effective_chat.id
-
         if db.request_DB.check_user_asignment(request_id, chat_id):
+
             request = db.request_DB.get_request_with_id(request_id)
-            context.bot.send_message(chat_id=chat_id, text=f"It is a pity you can't help now :(. See you later!")
+            context.bot.send_message(chat_id=update.effective_chat.id, text=self.lang.callback_reject_request_success)
             db.request_DB.mark_request(request_id, "OPEN")
         else:
-            context.bot.send_message(chat_id=chat_id, text=f"Sorry, but we could not recognize the request with that ID. Could you double check?")
+            context.bot.send_message(chat_id=chat_id, text=self.lang.callback_reject_request_error)
 
     # Handle unknown commands
     def unknown(self, update, context):
